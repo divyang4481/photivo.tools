@@ -135,7 +135,7 @@ mkdir -p $PKGDIR
 cd $BUILDDIR
 
 # check for installer script
-ISSFILE=$PhotivoRepoPath/packaging/win-installer/photivo-setup-win${GccArch}.iss
+ISSFILE=$ScriptPath/../win-installer/photivo-setup-win${GccArch}.iss
 if [ ! -s $ISSFILE ]; then
   Error "$ISSFILE is missing/corrupted!"
   exit 1
@@ -217,7 +217,7 @@ printf "SETUPNAME = $SETUPNAME\n"
 printf "NATIVEBINDIR = $NATIVEBINDIR\n"
 printf "NATIVEPKGDIR = $NATIVEPKGDIR\n\n"
 
-cat $PhotivoRepoPath/packaging/win-installer/photivo-setup-win${GccArch}.iss | \
+cat $ScriptPath/../win-installer/photivo-setup-win${GccArch}.iss | \
 sed "s/{{versionstring}}/${VERSTRING}/" | \
 sed "s/{{changelogfile}}/${NATIVECHLOGPATH}/" | \
 sed "s/{{outputbasename}}/${SETUPNAME}/" | \
