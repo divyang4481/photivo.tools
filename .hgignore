@@ -1,2 +1,3 @@
 syntax: regexp
 \.orig$
+^scripts\/ptrelease\.ini$
