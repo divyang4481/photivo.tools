@@ -48,15 +48,14 @@ SCRIPT_DIR    = os.path.dirname(os.path.abspath(__file__))
 
 PTBASEDIR   = 0      # Photivo repo base dir (where photivo.pro is)
 PKGBASEDIR  = 1      # base dir for building
-TSHOOTDIR   = 2      # dir for troubleshooter
-BUILDDIR    = 3      # dir where compiling is done
-BINDIR      = 4      # dir for finished binaries and data files
-ISSFILE     = 5      # installer script file
-CHLOGFILE   = 6      # Changelog.txt file
-LICFILE     = 7      # COPYING file
-LIC3FILE    = 8      # COPYING.3rd.party file
-DATESTYFILE = 9      # Hg shortdate style file
-VERSTYFILE  = 10     # Hg revision/version style file
+BUILDDIR    = 2      # dir where compiling is done
+BINDIR      = 3      # dir for finished binaries and data files
+ISSFILE     = 4      # installer script file
+CHLOGFILE   = 5      # Changelog.txt file
+LICFILE     = 6      # COPYING file
+LIC3FILE    = 7      # COPYING.3rd.party file
+DATESTYFILE = 8      # Hg shortdate style file
+VERSTYFILE  = 9      # Hg revision/version style file
 
 class Arch:
     win32 = 0
@@ -131,7 +130,6 @@ def build_paths(repo_dir):
     return [
         repo_dir,                           # PTBASEDIR
         base_dir,                           # PKGBASEDIR
-        os.path.join(base_dir, 'build-tshoot'),  # TSHOOTDIR
         [   # BUILDDIR
             os.path.join(base_dir, 'build-' + ArchNames.win32),
             os.path.join(base_dir, 'build-' + ArchNames.win64)
@@ -256,7 +254,6 @@ def prepare_dirs(paths):
         if os.path.exists(paths[PKGBASEDIR]):
             shutil.rmtree(paths[PKGBASEDIR])
 
-        os.makedirs(paths[TSHOOTDIR])
         os.makedirs(paths[BUILDDIR][Arch.win32])
         os.makedirs(paths[BUILDDIR][Arch.win64])
         os.makedirs(paths[BINDIR][Arch.win32])
@@ -354,14 +351,13 @@ def run_cmd(cmd, use_shell=False):
 
 # -----------------------------------------------------------------------
 class PhotivoBuilder:
-    _files = None
+    _install_files = None
     _paths = None
     _hgbranch = None
     _release_date = None
 
     _INST_NAME_PATTERN = 'photivo-setup-%s-%s'
     _INSTALLERS = 0
-    _TRSHOOTER  = 1
 
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     def __init__(self, paths):
@@ -369,15 +365,14 @@ class PhotivoBuilder:
         self._hgbranch = get_cmd_output([CMD[HG], 'branch'])
         self._release_date = get_cmd_output([CMD[HG], 'log', '-b', self._hgbranch, '-l', '1', \
                                             '--style', self._paths[DATESTYFILE]])
-        self._files = [[ \
-                          os.path.join(self._paths[PKGBASEDIR], self._INST_NAME_PATTERN%(self._release_date, ArchNames.win32) + '.exe'), \
-                          os.path.join(self._paths[PKGBASEDIR], self._INST_NAME_PATTERN%(self._release_date, ArchNames.win64) + '.exe') \
-                      ], \
-                      os.path.join(self._paths[PKGBASEDIR], 'photivo-win3264-troubleshooter-%s.zip'%self._release_date)]
+        self._install_files = [
+            os.path.join(self._paths[PKGBASEDIR], self._INST_NAME_PATTERN%(self._release_date, ArchNames.win32) + '.exe'),
+            os.path.join(self._paths[PKGBASEDIR], self._INST_NAME_PATTERN%(self._release_date, ArchNames.win64) + '.exe')
+        ]
 
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     def build(self, arch):
-        """Build Photivo and troubleshooter for the given architecture.
+        """Build Photivo for the given architecture.
         arch            can be either Arch.win32 or Arch.win64
         <return>  bool  True if build succeeded, False otherwise
         """
@@ -404,32 +399,12 @@ class PhotivoBuilder:
             print_err('ERROR: Building Photivo failed.')
             return False
 
-        # Move fresh binaries to bin dir and prepare for troubleshooter build
+        # Move fresh binaries to bin dir
         try:
             shutil.move(os.path.join(self._paths[BUILDDIR][arch], 'photivo.exe'), self._paths[BINDIR][arch])
             shutil.copy(os.path.join(self._paths[BUILDDIR][arch], 'ptClear.exe'), self._paths[BINDIR][arch])
-            os.remove(os.path.join(self._paths[BUILDDIR][arch], 'Objects', 'ptMain.o'))
         except OSError as err:
             print_err('ERROR: Copying binaries to "%s" failed.'%self._paths[BINDIR])
-            print_err(str(err))
-            return False
-
-        # Build the troubeshooter, i.e. Photivo with console
-        print_ok('Building troubeshooter (%s) ...'%ArchNames.names[arch])
-
-        build_result = run_cmd([CMD[QMAKE], os.path.join('..', 'photivo.pro'), \
-                               'CONFIG+=WithoutGimp WithoutClear console', 'CONFIG-=debug']) \
-                       and run_cmd([CMD[MAKE]])
-
-        if not build_result or not os.path.isfile(os.path.join(self._paths[BUILDDIR][arch], 'photivo.exe')):
-            print_err('ERROR: Building troubleshooter failed.')
-            return False
-
-        try:
-            shutil.move(os.path.join(self._paths[BUILDDIR][arch], 'photivo.exe'), \
-                        os.path.join(self._paths[TSHOOTDIR][arch], 'ptConsole%s.exe'%ArchNames.bits[arch]))
-        except OSError as err:
-            print_err('ERROR: Copying troubleshooter binary to "%s" failed.'%self._paths[TSHOOTDIR])
             print_err(str(err))
             return False
 
@@ -509,48 +484,23 @@ class PhotivoBuilder:
         return True
 
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-    def create_tshootzip(self):
-        print_ok('Creating troubleshooter archive ...')
-
-        howto_file = os.path.join(SCRIPT_DIR, 'win-troubleshooter', 'How to use.txt')
-        tshoot_bat = os.path.join(SCRIPT_DIR, 'win-troubleshooter', 'ptTroubleshoot.bat')
-
-        try:
-            for file in [howto_file, tshoot_bat]:
-                shutil.copy(file, self._paths[TSHOOTDIR])
-        except OSError as err:
-            print_err('ERROR: Could not copy ' + file)
-            print_err(str(err))
-            return
-
-        try:
-            shutil.make_archive(self._files[self._TRSHOOTER], 'zip', self._paths[TSHOOTDIR], self._paths[TSHOOTDIR])
-        except Exception as err:
-            print_err('ERROR creating the troubleshooter archive.')
-            print_err(str(err))
-            return
-
-    # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     def show_summary(self):
         print('\n' + DIVIDER + 'Final status' + DIVIDER)
 
         print('The packages are located in:\n', paths[PKGBASEDIR])
 
         print('\nPhotivo installer 64bit: ', end='')
-        inst64_ok = print_file_status(self._files[PhotivoBuilder._INSTALLERS][Arch.win64])
+        inst64_ok = print_file_status(self._install_files[Arch.win64])
 
         print('Photivo installer 32bit: ', end='')
-        inst32_ok = print_file_status(self._files[PhotivoBuilder._INSTALLERS][Arch.win32])
-
-        print('Troubleshooter archive : ', end='')
-        trshoot_ok = print_file_status(self._files[PhotivoBuilder._TRSHOOTER])
+        inst32_ok = print_file_status(self._install_files[Arch.win32])
 
         print('\nChangeset info:')
         run_cmd([CMD[HG], 'log', '-b', self._hgbranch, '-l', '1'])
 
         print(DIVIDER)
 
-        return inst64_ok and inst32_ok and trshoot_ok
+        return inst64_ok and inst32_ok
 
 
 # -----------------------------------------------------------------------
