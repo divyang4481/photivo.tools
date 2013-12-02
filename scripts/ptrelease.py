@@ -1,7 +1,15 @@
 #-*- coding: utf8 -*-
 
-import configparser, msvcrt, os, shutil, subprocess, sys
+import sys
+
+if sys.hexversion < 0x03020000:
+    print('ERROR: Your Python is too old. At least v3.2 needed. Yours is:')
+    print(sys.version)
+    sys.exit(1)
+
+import configparser, msvcrt, os, shutil, subprocess
 from subprocess import Popen, PIPE, STDOUT
+from datetime import datetime
 
 import ptupdata, ptuplibs
 from utils import print_ok, print_warn, print_err
@@ -9,13 +17,33 @@ from utils import print_ok, print_warn, print_err
 SCRIPT_VERSION = '2.0'
 
 # -----------------------------------------------------------------------
-QMAKE_CMD = ['qmake']
-MAKE_CMD  = ['mingw32-make']
-HG_CMD    = ['hg']
-ISCC_CMD  = ['iscc']
-ZIP_CMD   = ['7z', 'a']
 
-ARCHIVE_DIR   = ''
+QMAKE = 'qmake'
+MAKE  = 'make'
+HG    = 'hg'
+ISCC  = 'iscc'
+STRIP = 'strip'
+
+CMD = {   # updated by load_ini_file()
+    QMAKE : 'qmake',
+    MAKE  : 'mingw32-make',
+    HG    : 'hg',
+    ISCC  : 'iscc',
+    STRIP : 'strip'
+}
+
+# Some commands (like make) do not need parameters to stark working for real.
+# These parameters are for check_bin() ensure that the programs will be
+# executed if present but they will not attempt to do any real work.
+CMD_PARAMS_FOR_TEST = {
+    QMAKE : ['--version'],
+    MAKE  : ['--version'],
+    HG    : ['--version'],
+    ISCC  : ['/?'],
+    STRIP : ['--version']
+}
+
+ARCHIVE_DIR   = ''   # filled by load_ini_file()
 SCRIPT_DIR    = os.path.dirname(os.path.abspath(__file__))
 
 PTBASEDIR   = 0      # Photivo repo base dir (where photivo.pro is)
@@ -25,19 +53,22 @@ BUILDDIR    = 3      # dir where compiling is done
 BINDIR      = 4      # dir for finished binaries and data files
 ISSFILE     = 5      # installer script file
 CHLOGFILE   = 6      # Changelog.txt file
-DATESTYFILE = 7      # Hg shortdate style file
-VERSTYFILE  = 8      # Hg revision/version style file
+LICFILE     = 7      # COPYING file
+LIC3FILE    = 8      # COPYING.3rd.party file
+DATESTYFILE = 9      # Hg shortdate style file
+VERSTYFILE  = 10     # Hg revision/version style file
 
 class Arch:
     win32 = 0
     win64 = 1
     archs = [0, 1]
 
-class ArchNames
+class ArchNames:
     win32 = 'win32'
     win64 = 'win64'
     names = ['win32', 'win64']
     bits  = ['32', '64']
+    dirnames = []   # filled by load_ini_file()
 
 DIVIDER = '------------------------------------------------------------------------------'
 
@@ -53,18 +84,21 @@ def main():
         return False
 
     # setup, config and pre-build checks
-    load_ini_file()
+    if not load_ini_file(): return False
 
     paths = build_paths(os.getcwd())
 
     if not check_build_env(paths): return False
+
     if not prepare_dirs(paths): return False
 
     # build and package everything
-    builder = PhotivoBuilder()
-    if not builder.build(Arch.win32): return False
-    if not builder.build(Arch.win64): return False
-    if not builder.package(): return False
+    builder = PhotivoBuilder(paths)
+
+    for arch in Arch.archs:
+        if not change_tc_arch(ArchNames.dirnames[arch]): return False
+        if not builder.build(arch): return False
+        if not builder.package(arch): return False
 
     # final summary and option to clean up
     if not builder.show_summary(): return False
@@ -97,7 +131,7 @@ def build_paths(repo_dir):
     return [
         repo_dir,                           # PTBASEDIR
         base_dir,                           # PKGBASEDIR
-        os.path.join(base_dir, TSHOOTDIR),  # TSHOOTDIR
+        os.path.join(base_dir, 'build-tshoot'),  # TSHOOTDIR
         [   # BUILDDIR
             os.path.join(base_dir, 'build-' + ArchNames.win32),
             os.path.join(base_dir, 'build-' + ArchNames.win64)
@@ -108,7 +142,9 @@ def build_paths(repo_dir):
             os.path.join(SCRIPT_DIR, '..', 'win-installer', 'photivo-setup-' + ArchNames.win32 + '.iss'),
             os.path.join(SCRIPT_DIR, '..', 'win-installer', 'photivo-setup-' + ArchNames.win64 + '.iss')
         ],
-        os.path.join(repo_dir, 'Changelog.txt')           # CHLOGFILE
+        os.path.join(repo_dir, '..', 'Changelog.txt'),    # CHLOGFILE
+        os.path.join(repo_dir, 'COPYING'),                # LICFILE
+        os.path.join(repo_dir, 'COPYING.3rd.party'),      # LIC3FILE
         os.path.join(SCRIPT_DIR, 'hg-shortdate.style'),   # DATESTYFILE
         os.path.join(SCRIPT_DIR, 'hg-revdatenum.style')   # VERSTYFILE
     ]
@@ -120,14 +156,12 @@ def check_build_env(paths):
     os.environ['HGPLAIN'] = 'true'
 
     # Check presence of required commands
-    cmds_ok = check_bin(QMAKE_CMD[0])
-    cmds_ok = check_bin(MAKE_CMD[0]) and cmds_ok
-    cmds_ok = check_bin(HG_CMD[0]) and cmds_ok
-    cmds_ok = check_bin(ISCC_CMD[0]) and cmds_ok
-    cmds_ok = check_bin(ZIP_CMD[0]) and cmds_ok
-    if not cmds_ok: return false
+    cmds_ok = True
+    for cmd in CMD:
+        cmds_ok = check_bin([CMD[cmd]] + CMD_PARAMS_FOR_TEST[cmd]) and cmds_ok
+    if not cmds_ok: return False
 
-    hgbranch = get_cmd_output(HG_CMD + ['branch'])
+    hgbranch = get_cmd_output([CMD[HG], 'branch'])
     if hgbranch != 'default':
         print_warn('Working copy is set to branch "%s" instead of "default".'%(hgbranch))
         if not wait_for_yesno('Continue anyway?'):
@@ -136,8 +170,8 @@ def check_build_env(paths):
     # Working copy should be clean. The only exception is the Changelog.txt file.
     # Ignoring that makes it possible to start the release script and edit the
     # changelos while it is running.
-    if not 'commit: (clean)' in get_cmd_output(HG_CMD + ["summary"]):
-        hgstatus = get_cmd_output(HG_CMD + ["status"]).split('\n')
+    if not 'commit: (clean)' in get_cmd_output([CMD[HG], 'summary']):
+        hgstatus = get_cmd_output([CMD[HG], 'status']).split('\n')
         for file_entry in hgstatus:
             if (len(file_entry) > 0) and (not 'Changelog.txt' in file_entry):
                 print_warn('Working copy has uncommitted changes.')
@@ -148,13 +182,25 @@ def check_build_env(paths):
 
     files_ok = True
 
-    # Installer script files must be present
+    # files must be present
     if not os.path.isfile(paths[ISSFILE][Arch.win32]):
         print_err('ERROR: Installer script "%s" missing.'%paths[ISSFILE][Arch.win32])
         files_ok = False
 
     if not os.path.isfile(paths[ISSFILE][Arch.win64]):
         print_err('ERROR: Installer script "%s" missing.'%paths[ISSFILE][Arch.win64])
+        files_ok = False
+
+    if not os.path.isfile(paths[CHLOGFILE]):
+        print_err('ERROR: File "%s" missing.'%paths[CHLOGFILE])
+        files_ok = False
+
+    if not os.path.isfile(paths[LICFILE]):
+        print_err('ERROR: File "%s" missing.'%paths[LICFILE])
+        files_ok = False
+
+    if not os.path.isfile(paths[LIC3FILE]):
+        print_err('ERROR: File "%s" missing.'%paths[LIC3FILE])
         files_ok = False
 
     if not os.path.isfile(paths[DATESTYFILE]):
@@ -170,29 +216,38 @@ def check_build_env(paths):
 
 # -----------------------------------------------------------------------
 def load_ini_file():
+    def err_msg():
+        print_err('ERROR: Missing or incomplete config file (ptrelease.ini)!')
+        print_err('Must at least contain section [paths] with entries "win32" and "win64".')
+
     ini_path = os.path.splitext(__file__)[0] + '.ini'
 
     if not os.path.exists(ini_path):
-        return
+        err_msg()
+        return False
 
-    global QMAKE_CMD
-    global MAKE_CMD
-    global HG_CMD
-    global ISCC_CMD
-    global ZIP_CMD
-    global ARCHIVE_DIR
+    config = configparser.ConfigParser()
+    config.read(ini_path)
 
-    config = configparser.ConfigParser(ini_path)
+    try:
+        ArchNames.dirnames.append(config['paths']['win32'])
+        ArchNames.dirnames.append(config['paths']['win64'])
+    except KeyError:
+        err_msg()
+        return False
+
+    global CMD
 
     if 'commands' in config:
-        if 'qmake'   in config['commands']: QMAKE_CMD   = config['commands']['qmake']
-        if 'make'    in config['commands']: MAKE_CMD    = config['commands']['make']
-        if 'hg'      in config['commands']: HG_CMD      = config['commands']['hg']
-        if 'iscc'    in config['commands']: ISCC_CMD    = config['commands']['iscc']
-        if 'zip'     in config['commands']: ZIP_CMD     = config['commands']['zip']
+        if QMAKE in config['commands']: CMD[QMAKE] = config['commands']['qmake']
+        if MAKE  in config['commands']: CMD[MAKE]  = config['commands']['make']
+        if HG    in config['commands']: CMD[HG]    = config['commands']['hg']
+        if ISCC  in config['commands']: CMD[ISCC]  = config['commands']['iscc']
+        if STRIP in config['commands']: CMD[STRIP] = config['commands']['strip']
 
-    if 'paths' in config:
-        if 'archive' in config['paths']:    ARCHIVE_DIR = config['paths']['archive']
+    if 'archive' in config['paths']: ARCHIVE_DIR = config['paths']['archive']
+
+    return True
 
 
 # -----------------------------------------------------------------------
@@ -201,32 +256,33 @@ def prepare_dirs(paths):
         if os.path.exists(paths[PKGBASEDIR]):
             shutil.rmtree(paths[PKGBASEDIR])
 
-        os.makedirs(paths[PKGBASEDIR])
-        os.makedir(paths[TSHOOTDIR])
-        os.makedir(paths[BUILDDIR][Arch.win32])
-        os.makedir(paths[BUILDDIR][Arch.win64])
-        os.makedir(paths[BINDIR][Arch.win32])
-        os.makedir(paths[BINDIR][Arch.win64])
+        os.makedirs(paths[TSHOOTDIR])
+        os.makedirs(paths[BUILDDIR][Arch.win32])
+        os.makedirs(paths[BUILDDIR][Arch.win64])
+        os.makedirs(paths[BINDIR][Arch.win32])
+        os.makedirs(paths[BINDIR][Arch.win64])
 
         return True
 
-    except OSError:
-        print_err('ERROR: Setup of build directory tree "%s" failed.'%(builddir))
+    except OSError as err:
+        print_err('ERROR: Setup of build directory tree "%s" failed.'%paths[PKGBASEDIR])
+        print_err(str(err))
         return False
 
 
 # -----------------------------------------------------------------------
-# Tests if a command is present
-# exec_cmd   string  command that should be tested
-# <return>   bool    true if command can be executed
 def check_bin(exec_cmd):
+    """Tests if a command is present
+    exec_cmd   list    command that should be tested
+    <return>   bool    true if command can be executed
+    """
     with open(os.devnull, 'w') as devnull:
         try:
-            proc.call(exec_cmd, stdout=devnull, stderr=devnull)
-            return true
+            subprocess.call(exec_cmd, stdout=devnull, stderr=devnull)
+            return True
         except OSError:
-            print_err('ERROR: Required command not found:', exec_cmd)
-            return false
+            print_err('ERROR: Required command not found: ' + exec_cmd[0])
+            return False
 
 
 # -----------------------------------------------------------------------
@@ -254,7 +310,7 @@ def wait_for_yesno(msg):
 
 
 # -----------------------------------------------------------------------
-def wait_for_key(keys):
+def wait_for_key(msg, keys):
     print(msg, end=' ')
     sys.stdout.flush()
 
@@ -269,9 +325,21 @@ def wait_for_key(keys):
         except UnicodeDecodeError:
             pass
 
-        if char == keys:
+        if char.lower() in keys:
             print(char)
             return True
+
+
+# -----------------------------------------------------------------------
+def change_tc_arch(dirname):
+    try:
+        if run_cmd(['chboth.bat', dirname], use_shell=True):
+            return True
+    except Exception as err:
+        print_err(str(err))
+
+    print_err('ERROR: Failed to switch toolchain to ' + dirname)
+    return False
 
 
 # -----------------------------------------------------------------------
@@ -280,8 +348,8 @@ def get_cmd_output(cmd):
 
 
 # -----------------------------------------------------------------------
-def run_cmd(cmd):
-    return subprocess.call(cmd) == 0
+def run_cmd(cmd, use_shell=False):
+    return subprocess.call(cmd, shell=use_shell) == 0
 
 
 # -----------------------------------------------------------------------
@@ -298,8 +366,8 @@ class PhotivoBuilder:
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     def __init__(self, paths):
         self._paths = paths
-        self._hgbranch = get_cmd_output(HG_CMD + ['branch'])
-        self._release_date = get_cmd_output(HG_CMD + ['log', '-b', self._hgbranch, '-l', '1', \
+        self._hgbranch = get_cmd_output([CMD[HG], 'branch'])
+        self._release_date = get_cmd_output([CMD[HG], 'log', '-b', self._hgbranch, '-l', '1', \
                                             '--style', self._paths[DATESTYFILE]])
         self._files = [[ \
                           os.path.join(self._paths[PKGBASEDIR], self._INST_NAME_PATTERN%(self._release_date, ArchNames.win32) + '.exe'), \
@@ -309,8 +377,12 @@ class PhotivoBuilder:
 
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     def build(self, arch):
+        """Build Photivo and troubleshooter for the given architecture.
+        arch            can be either Arch.win32 or Arch.win64
+        <return>  bool  True if build succeeded, False otherwise
+        """
         try:
-            os.chdir(self._paths[PKGBASEDIR])
+            os.chdir(self._paths[BUILDDIR][arch])
         except OSError as err:
             print_err('ERROR: Changing directory to "%s" failed.'%self._paths[PKGBASEDIR])
             print_err(str(err))
@@ -319,39 +391,43 @@ class PhotivoBuilder:
         print_ok('Building Photivo and ptClear (%s) ...'%ArchNames.names[arch])
 
         # Build production Photivo
-        build_result = run_cmd(QMAKE_CMD + [os.path.join('..', 'photivo.pro'), 'CONFIG+=WithoutGimp', 'CONFIG-=debug']) \
-                       && run_cmd(MAKE_CMD)
+        build_result = run_cmd([CMD[QMAKE], \
+                               os.path.join('..', 'photivo.pro'), \
+                               'CONFIG+=WithoutGimp', \
+                               'CONFIG-=debug']) \
+                       and run_cmd([CMD[MAKE]])
 
         if not build_result \
-           or not os.path.isfile(os.path.join(self._paths[BUILDDIR][arch], 'photivo.exe') \
-           or not os.path.isfile(os.path.join(self._paths[BUILDDIR][arch], 'ptClear.exe') \
+           or not os.path.isfile(os.path.join(self._paths[BUILDDIR][arch], 'photivo.exe')) \
+           or not os.path.isfile(os.path.join(self._paths[BUILDDIR][arch], 'ptClear.exe')) \
         :
             print_err('ERROR: Building Photivo failed.')
             return False
 
+        # Move fresh binaries to bin dir and prepare for troubleshooter build
         try:
             shutil.move(os.path.join(self._paths[BUILDDIR][arch], 'photivo.exe'), self._paths[BINDIR][arch])
             shutil.copy(os.path.join(self._paths[BUILDDIR][arch], 'ptClear.exe'), self._paths[BINDIR][arch])
-            os.remove(os.path.join(self._paths[BUILDDIR][arch], 'Objects', 'ptMain.o')
+            os.remove(os.path.join(self._paths[BUILDDIR][arch], 'Objects', 'ptMain.o'))
         except OSError as err:
             print_err('ERROR: Copying binaries to "%s" failed.'%self._paths[BINDIR])
             print_err(str(err))
             return False
 
-        # Build the troubeshooter
+        # Build the troubeshooter, i.e. Photivo with console
         print_ok('Building troubeshooter (%s) ...'%ArchNames.names[arch])
 
-        build_result = run_cmd(QMAKE_CMD + [os.path.join('..', 'photivo.pro'), \
+        build_result = run_cmd([CMD[QMAKE], os.path.join('..', 'photivo.pro'), \
                                'CONFIG+=WithoutGimp WithoutClear console', 'CONFIG-=debug']) \
-                       && run_cmd(MAKE_CMD)
+                       and run_cmd([CMD[MAKE]])
 
-        if not build_result or not os.path.isfile(os.path.join(self._paths[BUILDDIR][arch], 'photivo.exe'):
+        if not build_result or not os.path.isfile(os.path.join(self._paths[BUILDDIR][arch], 'photivo.exe')):
             print_err('ERROR: Building troubleshooter failed.')
             return False
 
         try:
             shutil.move(os.path.join(self._paths[BUILDDIR][arch], 'photivo.exe'), \
-                        os.path.join(self._paths[TSHOOTDIR][arch], 'ptConsole%s.exe'%ArchNames.bits[arch])
+                        os.path.join(self._paths[TSHOOTDIR][arch], 'ptConsole%s.exe'%ArchNames.bits[arch]))
         except OSError as err:
             print_err('ERROR: Copying troubleshooter binary to "%s" failed.'%self._paths[TSHOOTDIR])
             print_err(str(err))
@@ -360,46 +436,99 @@ class PhotivoBuilder:
         return True
 
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-    def package(self):
-        # update libs and data files in bin dir
-        for arch in Arch.archs:
-            print_ok('Packaging files (%s)...'%(ArchNames.names[arch]))
-            if not ptuplibs.main(self._paths[PTBASEDIR], self._paths[BINDIR][arch], ArchNames.names[arch])
-            if not ptupdata.main(self._paths[PTBASEDIR], self._paths[BINDIR][arch])
+    def package(self, arch):
+        if not self._copy_data_dlls(arch): return False
+        if not self._create_installers(arch): return False
+        return True
 
-        # installer exes
-        if not self._create_installers(): return False
+    # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+    # update libs and data files in bin dir
+    def _copy_data_dlls(self, arch):
+        print_ok('Packaging files (%s)...'%(ArchNames.names[arch]))
 
-        # TODO create tshooter zip
+        # Changelog: make sure it is up to date (i.e. edited today)
+        while True:
+            chlog_moddate = datetime.fromtimestamp(os.path.getmtime(self._paths[CHLOGFILE])).date()
+            if chlog_moddate >= datetime.today().date():
+                break
+            else:
+                print_warn('Changelog not edited today, but on ' + str(chlog_moddate) + '. It is probably outdated.')
+                print('Note that any changes you make after this point will probably not be present')
+                print('in the installers.')
+
+                cont = wait_for_key('(R)etry, (c)ontinue or (a)bort?', ['r', 'c', 'a'])
+                if cont == 'r':
+                    continue
+                elif cont == 'c':
+                    break
+                elif cont == 'a':
+                    raise KeyboardInterrupt
+
+        shutil.copy(self._paths[CHLOGFILE], self._paths[BINDIR][arch])
+
+        # copy licence files
+        shutil.copy(self._paths[LICFILE], os.path.join(self._paths[BINDIR][arch], 'License.txt'))
+        shutil.copy(self._paths[LIC3FILE], os.path.join(self._paths[BINDIR][arch], 'License 3rd party.txt'))
+
+        # Call util scripts to updata data files and DLLs
+        if not ptupdata.main(self._paths[PTBASEDIR], self._paths[BINDIR][arch]): return False
+        if not ptuplibs.main(self._paths[PTBASEDIR], self._paths[BINDIR][arch], ArchNames.names[arch]): return False
+
+        # strip unnecessary symbols from binaries
+        for files in ['*.exe', '*.dll']:
+            if not run_cmd([CMD[STRIP], os.path.join(self._paths[BINDIR], files)]):
+                print_warn('WARNING: Failed to strip ' + os.path.join(self._paths[BINDIR], files))
+
+        return True
+
+
+    # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+    def _create_installers(self, arch):
+        print_ok('Creating installer (%s) ...'%(ArchNames.names[arch]))
+
+        ptversion = get_cmd_output([CMD[HG], 'log', '-b', self._hgbranch, '-l', '1', '--style', self._paths[VERSTYFILE]])
+
+        with open(self._paths[ISSFILE][arch]) as issfile:
+            iss_script = issfile.readlines()
+
+        i = 0
+        while i < len(iss_script):
+            line = iss_script[i].replace('{{versionstring}}', ptversion)
+            line = line.replace('{{changelogfile}}', self._paths[CHLOGFILE])
+            line = line.replace('{{outputbasename}}', self._INST_NAME_PATTERN%(self._release_date, ArchNames.names[arch]))
+            iss_script[i] = line.replace('{{bindir}}', self._paths[BINDIR])
+            i += 1
+
+        iscc_proc = Popen([CMD[ISCC], '/O' + self._paths[PKGBASEDIR]], stdin=PIPE)
+        iscc_proc.communicate(input=iss_script)
+
+        if iscc_proc.returncode != 0:
+            print_err('ERROR: Creating installer (%s) failed.'%(ArchNames.names[arch]))
+            return False
 
         return True
 
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-    def _create_installers(self):
-        ptversion = get_cmd_output(HG_CMD + ['log', '-b', self._hgbranch, '-l', '1', '--style', self._paths[VERSTYFILE])
+    def create_tshootzip(self):
+        print_ok('Creating troubleshooter archive ...')
 
-        for arch in Arch.archs:
-            print_ok('Creating installer (%s) ...'%(ArchNames.names[arch]))
+        howto_file = os.path.join(SCRIPT_DIR, 'win-troubleshooter', 'How to use.txt')
+        tshoot_bat = os.path.join(SCRIPT_DIR, 'win-troubleshooter', 'ptTroubleshoot.bat')
 
-            with open(self._paths[ISSFILE][arch] as issfile:
-                iss_script = issfile.readlines()
+        try:
+            for file in [howto_file, tshoot_bat]:
+                shutil.copy(file, self._paths[TSHOOTDIR])
+        except OSError as err:
+            print_err('ERROR: Could not copy ' + file)
+            print_err(str(err))
+            return
 
-            i = 0
-            while i < len(iss_script):
-                line = iss_script[i].replace('{{versionstring}}', ptversion)
-                line = line.replace('{{changelogfile}}', self._paths[CHLOGFILE])
-                line = line.replace('{{outputbasename}}', self._INST_NAME_PATTERN%(self._release_date, ArchNames.names[arch])
-                iss_script[i] = line.replace('{{bindir}}', self._paths[BINDIR])
-                i += 1
-
-            iscc_proc = Popen(ISCC_CMD + ['/O' + self._paths[PKGBASEDIR]], stdin=PIPE)
-            iscc_proc.communicate(input=iss_script)
-
-            if iscc_proc.returncode != 0:
-                print_err('ERROR: Creating installer (%s) failed.'%(ArchNames.names[arch]))
-                return False
-
-        return True
+        try:
+            shutil.make_archive(self._files[self._TRSHOOTER], 'zip', self._paths[TSHOOTDIR], self._paths[TSHOOTDIR])
+        except Exception as err:
+            print_err('ERROR creating the troubleshooter archive.')
+            print_err(str(err))
+            return
 
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     def show_summary(self):
@@ -417,7 +546,7 @@ class PhotivoBuilder:
         trshoot_ok = print_file_status(self._files[PhotivoBuilder._TRSHOOTER])
 
         print('\nChangeset info:')
-        run_cmd(HG_CMD + ['log', '-b', self._hgbranch, '-l', '1'])
+        run_cmd([CMD[HG], 'log', '-b', self._hgbranch, '-l', '1'])
 
         print(DIVIDER)
 

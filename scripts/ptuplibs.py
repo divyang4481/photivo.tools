@@ -4,45 +4,87 @@ import glob, os, shutil, sys
 from utils import print_ok, print_warn, print_err
 
 USER_INVOKED = False
+QT_UNIVERSAL_PATH = '_universal'
 
 FILE_LIST = {
     'win32': {
-        'mingw': [],
+        'mingw': [
+            'libgcc_s_sjlj-1.dll',
+            'libgomp-1.dll',
+            'libstdc++-6.dll',
+            'libwinpthread-1.dll'
+        ],
 
         'qt': [
             'libEGL.dll',
             'libGLESv2.dll',
-            'Qt5Core.dll',
+            'Qt5Core.dll' + QT_UNIVERSAL_PATH,
             'Qt5Gui.dll',
             'Qt5Network.dll',
             'Qt5Widgets.dll',
+            'plugins\\accessible\\qtaccessiblewidgets.dll',
+            'plugins\\imageformats\\qgif.dll',
+            'plugins\\imageformats\\qico.dll',
+            'plugins\\imageformats\\qjpeg.dll',
+            'plugins\\imageformats\\qmng.dll',
+            'plugins\\imageformats\\qtga.dll',
+            'plugins\\imageformats\\qtiff.dll',
+            'plugins\\imageformats\\qwbmp.dll',
+            'plugins\\platforms\\qwindows.dll'
         ],
 
-        'dev': []
-    }
+        'dev': [
+            'intl.dll',
+            'libexiv2.dll',
+            'libexpat-1.dll',
+            'libfftw3-3.dll',
+            'libglib-2.0-0.dll',
+            'libGraphicsMagick++-3.dll',
+            'libGraphicsMagick-3.dll',
+            'libGraphicsMagickWand-2.dll',
+            'libiconv-2.dll',
+            'libjpeg-8.dll',
+            'liblcms2-2.dll',
+            'liblensfun.dll',
+            'liblqr-1-0.dll',
+            'libpng15-15.dll',
+            'libtiff-5.dll',
+            'libtiffxx-5.dll',
+            'zlib1.dll'
+        ]
+    },
 
     'win64': {
         'mingw': [
             'libgcc_s_seh-1.dll',
-            'libglib-2.0-0.dll',
             'libgomp-1.dll',
             'libstdc++-6.dll',
-            'libwinpthread-1.dll',
+            'libwinpthread-1.dll'
         ],
 
         'qt': [
             'libEGL.dll',
             'libGLESv2.dll',
-            'Qt5Core.dll',
+            'Qt5Core.dll' + QT_UNIVERSAL_PATH,
             'Qt5Gui.dll',
             'Qt5Network.dll',
             'Qt5Widgets.dll',
+            'plugins\\accessible\\qtaccessiblewidgets.dll',
+            'plugins\\imageformats\\qgif.dll',
+            'plugins\\imageformats\\qico.dll',
+            'plugins\\imageformats\\qjpeg.dll',
+            'plugins\\imageformats\\qmng.dll',
+            'plugins\\imageformats\\qtga.dll',
+            'plugins\\imageformats\\qtiff.dll',
+            'plugins\\imageformats\\qwbmp.dll',
+            'plugins\\platforms\\qwindows.dll'
         ],
 
         'dev': [
             'libexiv2.dll',
             'libexpat-1.dll',
             'libfftw3-3.dll',
+            'libglib-2.0-0.dll',
             'libGraphicsMagick++-3.dll',
             'libGraphicsMagick-3.dll',
             'libGraphicsMagickWand-2.dll',
@@ -55,7 +97,7 @@ FILE_LIST = {
             'libpng15.dll',
             'libtiff-5.dll',
             'libtiffxx-5.dll',
-            'zlib1.dll',
+            'zlib1.dll'
         ]
     }
 }
@@ -96,13 +138,25 @@ def main(cli_params):
 
     file_list = []
     for file in file_dict['mingw']:
-        file_list.append(os.path.join(src_mingw, file)
-    for file in file_dict['qt']:
-        file_list.append(os.path.join(src_qt, file)
-    for file in file_dict['dev']:
-        file_list.append(os.path.join(src_dev, file)
+        file_list.append([os.path.join(src_mingw, file), destdir])
 
-    if not copy_libs(file_list, destdir):
+    for file in file_dict['qt']:
+        if file.endswith(QT_UNIVERSAL_PATH):
+            destfile = file.replace(QT_UNIVERSAL_PATH, '')
+        else:
+            destfile = file
+
+        if '\\' in file:
+            file_list.append([os.path.join(os.path.dirname(src_qt), file),
+                                           os.path.join(os.path.split(destfile)[0])])
+            os.makedirs(os.path.dirname(os.path.join(destdir, destfile)), exist_ok=True)
+        else:
+            file_list.append([os.path.join(src_qt, file), os.path.join(destdir, destfile)])
+
+    for file in file_dict['dev']:
+        file_list.append([os.path.join(src_dev, file), destdir])
+
+    if not copy_libs(file_list):
         return False
 
     print_ok('Libraries successfully updated.')
@@ -110,14 +164,16 @@ def main(cli_params):
 
 
 # -----------------------------------------------------------------------
-def copy_libs(file_list, destdir):
+def copy_libs(file_list):
     status = True
 
-    for file in file_list:
+    for entry in file_list:
+        srcfile, dest = entry
         try:
-            shutil.copy(file, destdir)
+            print(os.path.split(srcfile)[1])
+            shutil.copy(srcfile, dest)
         except OSError as err:
-            print_err('Could not copy ' + file)
+            print_err('Could not copy ' + srcfile)
             print_err(str(err))
             status = False
 
@@ -128,7 +184,7 @@ def copy_libs(file_list, destdir):
 def kill_old_libs(destdir):
     status = True
 
-    for file in glob.glob(os.path.join(destdir, '*.dll'):
+    for file in glob.glob(os.path.join(destdir, '*.dll')):
         try:
             os.remove(file)
         except OSError as err:
@@ -143,7 +199,7 @@ def kill_old_libs(destdir):
 if __name__ == '__main__':
     try:
         USER_INVOKED = True
-        sys.exit(0 if main() else 1)
+        sys.exit(0 if main(sys.argv[1:]) else 1)
     except KeyboardInterrupt:
         print_err('\nAborted by the user.')
         sys.exit(1)

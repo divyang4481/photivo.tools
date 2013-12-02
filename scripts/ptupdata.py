@@ -14,7 +14,7 @@ DIR_LIST = [
     ['Profiles',        None],
     ['Themes',          None],
     ['Translations',    '*.ts'],
-    ['UISettings'       None]
+    ['UISettings',      None]
 ]
 
 # -----------------------------------------------------------------------
@@ -49,6 +49,8 @@ def main(cli_params):
             return False
 
     for direntry in DIR_LIST:
+        print('Updating:', direntry[0])
+
         try:
             if direntry[1] == None:
                 ignorer = None
@@ -71,7 +73,7 @@ def main(cli_params):
 if __name__ == '__main__':
     try:
         USER_INVOKED = True
-        sys.exit(0 if main() else 1)
+        sys.exit(0 if main(sys.argv[1:]) else 1)
     except KeyboardInterrupt:
         print_err('\nAborted by the user.')
         sys.exit(1)
