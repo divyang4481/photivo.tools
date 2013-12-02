@@ -100,9 +100,12 @@ def main():
         if not builder.package(arch): return False
 
     # final summary and option to clean up
-    if not builder.show_summary(): return False
+    if not builder.show_summary():
+        print_err('Something went wrong along the way.')
+        return False
 
-    print('Everything looks fine. You can test and upload the release now.')
+    print_ok('Everything looks fine.')
+    print('You can test and upload the release now.')
     print('\nAfterwards I can clean up automatically, i.e.:')
 
     if ARCHIVE_DIR == '':
@@ -137,10 +140,10 @@ def build_paths(repo_dir):
             os.path.join(base_dir, 'bin-' + ArchNames.win32),
             os.path.join(base_dir, 'bin-' + ArchNames.win64)
         ],[ # ISSFILE
-            os.path.join(SCRIPT_DIR, '..', 'win-installer', 'photivo-setup-' + ArchNames.win32 + '.iss'),
-            os.path.join(SCRIPT_DIR, '..', 'win-installer', 'photivo-setup-' + ArchNames.win64 + '.iss')
+            os.path.normpath(os.path.join(SCRIPT_DIR, '..', 'win-installer', 'photivo-setup-' + ArchNames.win32 + '.iss')),
+            os.path.normpath(os.path.join(SCRIPT_DIR, '..', 'win-installer', 'photivo-setup-' + ArchNames.win64 + '.iss'))
         ],
-        os.path.join(repo_dir, '..', 'Changelog.txt'),    # CHLOGFILE
+        os.path.normpath(os.path.join(repo_dir, '..', 'Changelog.txt')),    # CHLOGFILE
         os.path.join(repo_dir, 'COPYING'),                # LICFILE
         os.path.join(repo_dir, 'COPYING.3rd.party'),      # LIC3FILE
         os.path.join(SCRIPT_DIR, 'hg-shortdate.style'),   # DATESTYFILE
@@ -235,6 +238,7 @@ def load_ini_file():
         return False
 
     global CMD
+    global ARCHIVE_DIR
 
     if 'commands' in config:
         if QMAKE in config['commands']: CMD[QMAKE] = config['commands']['qmake']
@@ -324,7 +328,7 @@ def wait_for_key(msg, keys):
 
         if char.lower() in keys:
             print(char)
-            return True
+            return char
 
 
 # -----------------------------------------------------------------------
@@ -348,6 +352,15 @@ def get_cmd_output(cmd):
 def run_cmd(cmd, use_shell=False):
     return subprocess.call(cmd, shell=use_shell) == 0
 
+
+# -----------------------------------------------------------------------
+def print_file_status(filepath):
+    if os.path.isfile(filepath):
+        print('OK')
+        return True
+    else:
+        print('Error')
+        return False
 
 # -----------------------------------------------------------------------
 class PhotivoBuilder:
@@ -387,7 +400,7 @@ class PhotivoBuilder:
 
         # Build production Photivo
         build_result = run_cmd([CMD[QMAKE], \
-                               os.path.join('..', 'photivo.pro'), \
+                               os.path.join('..', '..', 'photivo.pro'), \
                                'CONFIG+=WithoutGimp', \
                                'CONFIG-=debug']) \
                        and run_cmd([CMD[MAKE]])
@@ -412,13 +425,18 @@ class PhotivoBuilder:
 
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     def package(self, arch):
+        """Copy data files and DLLs to create a complete Photivo program folder.
+        Then create the installer package from that.
+        <return>  bool  True if the installer was successfully created, False otherwise
+        """
         if not self._copy_data_dlls(arch): return False
         if not self._create_installers(arch): return False
         return True
 
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-    # update libs and data files in bin dir
     def _copy_data_dlls(self, arch):
+        """update libs and data files in bin dir
+        """
         print_ok('Packaging files (%s)...'%(ArchNames.names[arch]))
 
         # Changelog: make sure it is up to date (i.e. edited today)
@@ -446,13 +464,19 @@ class PhotivoBuilder:
         shutil.copy(self._paths[LIC3FILE], os.path.join(self._paths[BINDIR][arch], 'License 3rd party.txt'))
 
         # Call util scripts to updata data files and DLLs
-        if not ptupdata.main(self._paths[PTBASEDIR], self._paths[BINDIR][arch]): return False
-        if not ptuplibs.main(self._paths[PTBASEDIR], self._paths[BINDIR][arch], ArchNames.names[arch]): return False
+        if not ptupdata.main([self._paths[PTBASEDIR], self._paths[BINDIR][arch]]):
+            return False
+        try:
+            if not ptuplibs.main([os.environ['TC_BASE'], self._paths[BINDIR][arch], ArchNames.names[arch]]):
+                return False
+        except KeyError:
+            print_err('Environment variable TC_BASE not set.')
+            return False
 
         # strip unnecessary symbols from binaries
         for files in ['*.exe', '*.dll']:
-            if not run_cmd([CMD[STRIP], os.path.join(self._paths[BINDIR], files)]):
-                print_warn('WARNING: Failed to strip ' + os.path.join(self._paths[BINDIR], files))
+            if not run_cmd([CMD[STRIP], os.path.join(self._paths[BINDIR][arch], files)]):
+                print_warn('WARNING: Failed to strip ' + os.path.join(self._paths[BINDIR][arch], files))
 
         return True
 
@@ -471,11 +495,11 @@ class PhotivoBuilder:
             line = iss_script[i].replace('{{versionstring}}', ptversion)
             line = line.replace('{{changelogfile}}', self._paths[CHLOGFILE])
             line = line.replace('{{outputbasename}}', self._INST_NAME_PATTERN%(self._release_date, ArchNames.names[arch]))
-            iss_script[i] = line.replace('{{bindir}}', self._paths[BINDIR])
+            iss_script[i] = line.replace('{{bindir}}', self._paths[BINDIR][arch])
             i += 1
 
-        iscc_proc = Popen([CMD[ISCC], '/O' + self._paths[PKGBASEDIR]], stdin=PIPE)
-        iscc_proc.communicate(input=iss_script)
+        iscc_proc = Popen([CMD[ISCC], '/O' + self._paths[PKGBASEDIR], '-'], stdin=PIPE)
+        iscc_proc.communicate(input=bytes('\n'.join(iss_script), 'latin_1'))
 
         if iscc_proc.returncode != 0:
             print_err('ERROR: Creating installer (%s) failed.'%(ArchNames.names[arch]))
@@ -485,9 +509,9 @@ class PhotivoBuilder:
 
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     def show_summary(self):
-        print('\n' + DIVIDER + 'Final status' + DIVIDER)
+        print('\n' + DIVIDER + '\nFinal status\n' + DIVIDER)
 
-        print('The packages are located in:\n', paths[PKGBASEDIR])
+        print('The packages are located in:\n' + self._paths[PKGBASEDIR])
 
         print('\nPhotivo installer 64bit: ', end='')
         inst64_ok = print_file_status(self._install_files[Arch.win64])

@@ -148,10 +148,11 @@ def main(cli_params):
 
         if '\\' in file:
             file_list.append([os.path.join(os.path.dirname(src_qt), file),
-                                           os.path.join(os.path.split(destfile)[0])])
+                              os.path.join(destdir, destfile)])
             os.makedirs(os.path.dirname(os.path.join(destdir, destfile)), exist_ok=True)
         else:
-            file_list.append([os.path.join(src_qt, file), os.path.join(destdir, destfile)])
+            file_list.append([os.path.join(src_qt, file),
+                              os.path.join(destdir, destfile)])
 
     for file in file_dict['dev']:
         file_list.append([os.path.join(src_dev, file), destdir])
@@ -173,8 +174,9 @@ def copy_libs(file_list):
             print(os.path.split(srcfile)[1])
             shutil.copy(srcfile, dest)
         except OSError as err:
-            print_err('Could not copy ' + srcfile)
             print_err(str(err))
+            print_err('Source: ' + srcfile)
+            print_err('Dest  : ' + dest)
             status = False
 
     return status

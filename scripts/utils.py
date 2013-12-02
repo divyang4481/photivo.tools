@@ -48,4 +48,5 @@ def print_warn(msg):
 def print_err(msg):
     print_color(BRIGHT_RED, msg)
 
-
+def reset_color():
+    pass
