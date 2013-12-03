@@ -88,7 +88,6 @@ def main():
     paths = build_paths(os.getcwd())
 
     if not check_build_env(paths): return False
-
     if not prepare_dirs(paths): return False
 
     # build and package everything
@@ -109,14 +108,13 @@ def main():
     print('\nAfterwards I can clean up automatically, i.e.:')
 
     if ARCHIVE_DIR == '':
-        print('* delete everything created during the build process except')
-        print('  the two installers')
+        print('* delete everything created during the build process.')
     else:
         print('* move installers to', ARCHIVE_DIR)
         print('* delete everything else created during the build process')
 
     if wait_for_yesno('\nShall I clean up now?'):
-        if not cleanup(): return False
+        if not builder.cleanup(): return False
     else:
         print('OK. The mess stays.')
 
@@ -525,6 +523,30 @@ class PhotivoBuilder:
         print(DIVIDER)
 
         return inst64_ok and inst32_ok
+
+    # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+    def cleanup(self):
+        if ARCHIVE_DIR != '':
+            try:
+                if not os.path.isdir(ARCHIVE_DIR):
+                    raise OSError(ARCHIVE_DIR + ' is missing or not a folder.')
+
+                for arch in Arch.archs:
+                    shutil.move(self._install_files[arch], ARCHIVE_DIR)
+            except OSError as err:
+                print_err('Cleanup failed. Could not move installers.')
+                print_err(str(err))
+                return False
+
+        try:
+            os.chdir(self._paths[PTBASEDIR])
+            shutil.rmtree(self._paths[PKGBASEDIR])
+        except Exception as err:
+            print_err('Cleanup failed.')
+            print_err(str(err))
+            return False
+
+        return True
 
 
 # -----------------------------------------------------------------------
