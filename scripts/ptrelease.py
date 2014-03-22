@@ -73,7 +73,7 @@ DIVIDER = '---------------------------------------------------------------------
 
 # =======================================================================
 
-def main():
+def main(cli_params):
     print('\nPhotivo for Windows package builder', SCRIPT_VERSION)
     print(DIVIDER, end='\n\n')
 
@@ -93,7 +93,20 @@ def main():
     # build and package everything
     builder = PhotivoBuilder(paths)
 
-    for arch in Arch.archs:
+    archlist = Arch.archs
+    fullrelease = True
+
+    if len(cli_params) > 0:
+        if cli_params[0] == '32':
+            print_warn('Only building 32bit package!')
+            archlist = [Arch.win32]
+            fullrelease = False
+        elif cli_params[0] == '64':
+            print_warn('Only building 64bit package!')
+            archlist = [Arch.win64]
+            fullrelease = False
+
+    for arch in archlist:
         if not change_tc_arch(ArchNames.dirnames[arch]): return False
         if not builder.build(arch): return False
         if not builder.package(arch): return False
@@ -103,20 +116,23 @@ def main():
         print_err('Something went wrong along the way.')
         return False
 
-    print_ok('Everything looks fine.')
-    print('You can test and upload the release now.')
-    print('\nAfterwards I can clean up automatically, i.e.:')
+    if fullrelease:
+        print_ok('Everything looks fine.')
+        print('You can test and upload the release now.')
+        print('\nAfterwards I can clean up automatically, i.e.:')
 
-    if ARCHIVE_DIR == '':
-        print('* delete everything created during the build process.')
-    else:
-        print('* move installers to', ARCHIVE_DIR)
-        print('* delete everything else created during the build process')
+        if ARCHIVE_DIR == '':
+            print('* delete everything created during the build process.')
+        else:
+            print('* move installers to', ARCHIVE_DIR)
+            print('* delete everything else created during the build process')
 
-    if wait_for_yesno('\nShall I clean up now?'):
-        if not builder.cleanup(): return False
-    else:
-        print('OK. The mess stays.')
+        if wait_for_yesno('\nShall I clean up now?'):
+            if not builder.cleanup(): return False
+        else:
+            print('OK. The mess stays.')
+    else
+        print_warn('Remember: Only the ' + Archnames.names[archlist[0]] + ' installer was built.')
 
     print_ok('All done.')
     return True
@@ -552,7 +568,7 @@ class PhotivoBuilder:
 # -----------------------------------------------------------------------
 if __name__ == '__main__':
     try:
-        sys.exit(0 if main() else 1)
+        sys.exit(0 if main(sys.argv[1:]) else 1)
     except KeyboardInterrupt:
         print_err('\nAborted by the user.')
         sys.exit(1)
