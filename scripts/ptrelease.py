@@ -57,6 +57,8 @@ LIC3FILE    = 7      # COPYING.3rd.party file
 DATESTYFILE = 8      # Hg shortdate style file
 VERSTYFILE  = 9      # Hg revision/version style file
 
+TC_NAME = ''    # filled by load_ini_file()
+
 class Arch:
     win32 = 0
     win64 = 1
@@ -67,7 +69,6 @@ class ArchNames:
     win64 = 'win64'
     names = ['win32', 'win64']
     bits  = ['32', '64']
-    dirnames = []   # filled by load_ini_file()
 
 DIVIDER = '------------------------------------------------------------------------------'
 
@@ -90,9 +91,6 @@ def main(cli_params):
     if not check_build_env(paths): return False
     if not prepare_dirs(paths): return False
 
-    # build and package everything
-    builder = PhotivoBuilder(paths)
-
     archlist = Arch.archs
     fullrelease = True
 
@@ -106,8 +104,10 @@ def main(cli_params):
             archlist = [Arch.win64]
             fullrelease = False
 
+    # build and package everything
+    builder = PhotivoBuilder(paths)
+
     for arch in archlist:
-        if not change_tc_arch(ArchNames.dirnames[arch]): return False
         if not builder.build(arch): return False
         if not builder.package(arch): return False
 
@@ -131,7 +131,7 @@ def main(cli_params):
             if not builder.cleanup(): return False
         else:
             print('OK. The mess stays.')
-    else
+    else:
         print_warn('Remember: Only the ' + Archnames.names[archlist[0]] + ' installer was built.')
 
     print_ok('All done.')
@@ -233,7 +233,7 @@ def check_build_env(paths):
 def load_ini_file():
     def err_msg():
         print_err('ERROR: Missing or incomplete config file (ptrelease.ini)!')
-        print_err('Must at least contain section [paths] with entries "win32" and "win64".')
+        print_err('Must at least contain section [paths] with entry "toolchain".')
 
     ini_path = os.path.splitext(__file__)[0] + '.ini'
 
@@ -245,8 +245,10 @@ def load_ini_file():
     config.read(ini_path)
 
     try:
-        ArchNames.dirnames.append(config['paths']['win32'])
-        ArchNames.dirnames.append(config['paths']['win64'])
+        global TC_NAME
+        TC_NAME = config['paths']['toolchain']
+        if TC_NAME.strip() == '':
+            raise KeyError
     except KeyError:
         err_msg()
         return False
@@ -287,7 +289,8 @@ def prepare_dirs(paths):
 
 # -----------------------------------------------------------------------
 def check_bin(exec_cmd):
-    """Tests if a command is present
+    """
+    Tests if a command is present.
     exec_cmd   list    command that should be tested
     <return>   bool    true if command can be executed
     """
@@ -346,25 +349,13 @@ def wait_for_key(msg, keys):
 
 
 # -----------------------------------------------------------------------
-def change_tc_arch(dirname):
-    try:
-        if run_cmd(['chboth.bat', dirname], use_shell=True):
-            return True
-    except Exception as err:
-        print_err(str(err))
-
-    print_err('ERROR: Failed to switch toolchain to ' + dirname)
-    return False
+def get_cmd_output(cmd, use_shell=False, env=None):
+    return subprocess.check_output(cmd, shell=use_shell, env=env, universal_newlines=True).strip()
 
 
 # -----------------------------------------------------------------------
-def get_cmd_output(cmd):
-    return subprocess.check_output(cmd, universal_newlines=True).strip()
-
-
-# -----------------------------------------------------------------------
-def run_cmd(cmd, use_shell=False):
-    return subprocess.call(cmd, shell=use_shell) == 0
+def run_cmd(cmd, use_shell=False, env=None):
+    return subprocess.call(cmd, shell=use_shell, env=env) == 0
 
 
 # -----------------------------------------------------------------------
@@ -382,6 +373,7 @@ class PhotivoBuilder:
     _paths = None
     _hgbranch = None
     _release_date = None
+    _env = os.environ
 
     _INST_NAME_PATTERN = 'photivo-setup-%s-%s'
     _INSTALLERS = 0
@@ -399,10 +391,14 @@ class PhotivoBuilder:
 
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     def build(self, arch):
-        """Build Photivo for the given architecture.
+        """
+        Build Photivo for the given architecture.
         arch            can be either Arch.win32 or Arch.win64
         <return>  bool  True if build succeeded, False otherwise
         """
+        if not self._change_tc_arch(ArchNames.bits[arch]):
+            return False
+        
         try:
             os.chdir(self._paths[BUILDDIR][arch])
         except OSError as err:
@@ -416,8 +412,9 @@ class PhotivoBuilder:
         build_result = run_cmd([CMD[QMAKE], \
                                os.path.join('..', '..', 'photivo.pro'), \
                                'CONFIG+=WithoutGimp', \
-                               'CONFIG-=debug']) \
-                       and run_cmd([CMD[MAKE]])
+                               'CONFIG-=debug'],
+                               env=self._env) \
+                       and run_cmd([CMD[MAKE]], env=self._env)
 
         if not build_result \
            or not os.path.isfile(os.path.join(self._paths[BUILDDIR][arch], 'photivo.exe')) \
@@ -439,7 +436,8 @@ class PhotivoBuilder:
 
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     def package(self, arch):
-        """Copy data files and DLLs to create a complete Photivo program folder.
+        """
+        Copy data files and DLLs to create a complete Photivo program folder.
         Then create the installer package from that.
         <return>  bool  True if the installer was successfully created, False otherwise
         """
@@ -448,8 +446,27 @@ class PhotivoBuilder:
         return True
 
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+    def _change_tc_arch(self, archname):
+        """
+        Changes the toolchain architecture between 32bit and 64bit.
+        Calls the external switchtc script and parses its output.
+        """
+        try:
+            for line in get_cmd_output(['switchtc', TC_NAME, archname, '--listenv'], use_shell=True).split('\n'):
+                key, _, val = line.strip().partition('=')
+                self._env[key] = val            
+            return True
+        except Exception as err:
+            print_err(str(err))
+
+        print_err('ERROR: Failed to switch toolchain to %s %s.'%(TC_NAME, archname))
+        return False
+
+
+    # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     def _copy_data_dlls(self, arch):
-        """update libs and data files in bin dir
+        """
+        Updates libs and data files in the bin dir.
         """
         print_ok('Packaging files (%s)...'%(ArchNames.names[arch]))
 
@@ -481,10 +498,12 @@ class PhotivoBuilder:
         if not ptupdata.main([self._paths[PTBASEDIR], self._paths[BINDIR][arch]]):
             return False
         try:
-            if not ptuplibs.main([os.environ['TC_BASE'], self._paths[BINDIR][arch], ArchNames.names[arch]]):
+            if not ptuplibs.main([os.path.dirname(os.environ['tcpath']), 
+                                  self._paths[BINDIR][arch], 
+                                  ArchNames.bits[arch]]):
                 return False
         except KeyError:
-            print_err('Environment variable TC_BASE not set.')
+            print_err('Environment variable tcpath not set.')
             return False
 
         # strip unnecessary symbols from binaries
