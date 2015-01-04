@@ -4,7 +4,6 @@ import glob, os, shutil, sys
 from utils import print_ok, print_warn, print_err
 
 USER_INVOKED = False
-QT_UNIVERAL_SUFFIX = '_universal'
 
 FILE_LIST = {
     'win32': {
@@ -16,21 +15,10 @@ FILE_LIST = {
         ],
 
         'qt': [
-            'libEGL.dll',
-            'libGLESv2.dll',
-            'Qt5Core.dll' + QT_UNIVERAL_SUFFIX,
+            'Qt5Core.dll',
             'Qt5Gui.dll',
             'Qt5Network.dll',
-            'Qt5Widgets.dll',
-            'plugins\\accessible\\qtaccessiblewidgets.dll',
-            'plugins\\imageformats\\qgif.dll',
-            'plugins\\imageformats\\qico.dll',
-            'plugins\\imageformats\\qjpeg.dll',
-            'plugins\\imageformats\\qmng.dll',
-            'plugins\\imageformats\\qtga.dll',
-            'plugins\\imageformats\\qtiff.dll',
-            'plugins\\imageformats\\qwbmp.dll',
-            'plugins\\platforms\\qwindows.dll'
+            'Qt5Widgets.dll'
         ],
 
         'dev': [
@@ -43,13 +31,12 @@ FILE_LIST = {
             'libGraphicsMagick-3.dll',
             'libGraphicsMagickWand-2.dll',
             'libiconv-2.dll',
-            'libjpeg-8.dll',
+            'libjpeg-9.dll',
             'liblcms2-2.dll',
             'liblensfun.dll',
             'liblqr-1-0.dll',
-            'libpng16-16.dll',
+            'libpng16.dll',
             'libtiff-5.dll',
-            'libtiffxx-5.dll',
             'zlib1.dll'
         ]
     },
@@ -63,21 +50,10 @@ FILE_LIST = {
         ],
 
         'qt': [
-            'libEGL.dll',
-            'libGLESv2.dll',
-            'Qt5Core.dll' + QT_UNIVERAL_SUFFIX,
+            'Qt5Core.dll',
             'Qt5Gui.dll',
             'Qt5Network.dll',
-            'Qt5Widgets.dll',
-            'plugins\\accessible\\qtaccessiblewidgets.dll',
-            'plugins\\imageformats\\qgif.dll',
-            'plugins\\imageformats\\qico.dll',
-            'plugins\\imageformats\\qjpeg.dll',
-            'plugins\\imageformats\\qmng.dll',
-            'plugins\\imageformats\\qtga.dll',
-            'plugins\\imageformats\\qtiff.dll',
-            'plugins\\imageformats\\qwbmp.dll',
-            'plugins\\platforms\\qwindows.dll'
+            'Qt5Widgets.dll'
         ],
 
         'dev': [
@@ -90,13 +66,12 @@ FILE_LIST = {
             'libGraphicsMagickWand-2.dll',
             'libiconv-2.dll',
             'libintl-8.dll',
-            'libjpeg-8.dll',
+            'libjpeg-9.dll',
             'liblcms2-2.dll',
             'liblensfun.dll',
             'liblqr-1-0.dll',
-            'libpng16-16.dll',
+            'libpng16.dll',
             'libtiff-5.dll',
-            'libtiffxx-5.dll',
             'zlib1.dll'
         ]
     }
@@ -141,10 +116,7 @@ def main(cli_params):
         file_list.append([os.path.join(src_mingw, file), destdir])
 
     for file in file_dict['qt']:
-        if file.endswith(QT_UNIVERAL_SUFFIX):
-            destfile = file.replace(QT_UNIVERAL_SUFFIX, '')
-        else:
-            destfile = file
+        destfile = file
 
         if '\\' in file:
             file_list.append([os.path.join(os.path.dirname(src_qt), file),
